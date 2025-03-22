@@ -118,15 +118,11 @@ void putchar(char ch) {
     sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /* Console Putchar */);
 }
 
-
-
-void handle_trap(struct trap_frame *f) {
-    uint32_t scause = READ_CSR(scause);
-    uint32_t stval = READ_CSR(stval);
-    uint32_t user_pc = READ_CSR(sepc);
-
-    PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+long getchar(void) {
+    struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
+    return ret.error;
 }
+
 
 
 extern char __free_ram[], __free_ram_end[];
@@ -342,6 +338,47 @@ void proc_b_entry(void) {
         yield();
     }
 }
+
+void handle_syscall(struct trap_frame *f) {
+    switch (f->a3) {
+        case SYS_PUTCHAR:
+            putchar(f->a0);
+            break;
+	case SYS_GETCHAR:
+            while (1) {
+                long ch = getchar();
+                if (ch >= 0) {
+                    f->a0 = ch;
+                    break;
+                }
+
+                yield();
+            }
+            break;
+        case SYS_EXIT:
+            printf("process %d exited\n", current_proc->pid);
+            current_proc->state = PROC_EXITED;
+            yield();
+            PANIC("unreachable");    
+        default:
+            PANIC("unexpected syscall a3=%x\n", f->a3);
+    }
+}
+
+void handle_trap(struct trap_frame *f) {
+    uint32_t scause = READ_CSR(scause);
+    uint32_t stval = READ_CSR(stval);
+    uint32_t user_pc = READ_CSR(sepc);
+    if (scause == SCAUSE_ECALL) {
+        handle_syscall(f);
+        user_pc += 4;
+    } else {
+        PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+    }
+
+    WRITE_CSR(sepc, user_pc);
+}
+
 
 void kernel_main(void) {
     memset(__bss, 0, (size_t) __bss_end - (size_t) __bss);
